@@ -1,4 +1,6 @@
 # Manga/Image Translator (English Readme)
+Quick update: feat: implement image queue, URL scraper for easy use, and updated for nvidia blackwell, tested on 5070ti
+
 Last Updated: 2025/05/10
 ---
 ![Commit activity](https://img.shields.io/github/commit-activity/m/zyddnys/manga-image-translator)
