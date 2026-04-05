@@ -16,20 +16,28 @@ class ExecutorInstance(BaseModel):
         self.busy = False
 
     async def sent(self, image: Image, config: Config):
-        return await fetch_data("http://"+self.ip+":"+str(self.port)+"/simple_execute/translate", image, config)
+        import server.main
+        headers = {'X-Nonce': server.main.nonce} if server.main.nonce else {}
+        return await fetch_data("http://"+self.ip+":"+str(self.port)+"/simple_execute/translate", image, config, headers=headers)
 
     async def sent_stream(self, image: Image, config: Config, sender: NotifyType):
-        await fetch_data_stream("http://"+self.ip+":"+str(self.port)+"/execute/translate", image, config, sender)
+        import server.main
+        headers = {'X-Nonce': server.main.nonce} if server.main.nonce else {}
+        await fetch_data_stream("http://"+self.ip+":"+str(self.port)+"/execute/translate", image, config, sender, headers=headers)
 
     async def sent_batch(self, images: List[Image.Image], config: Config, batch_size: int):
         """发送批量翻译请求"""
+        import server.main
+        headers = {'X-Nonce': server.main.nonce} if server.main.nonce else {}
         return await fetch_data("http://"+self.ip+":"+str(self.port)+"/simple_execute/translate_batch", 
-                               {"images": images, "config": config, "batch_size": batch_size})
+                               {"images": images, "config": config, "batch_size": batch_size}, config, headers=headers)
 
     async def sent_batch_stream(self, images: List[Image.Image], config: Config, batch_size: int, sender: NotifyType):
         """发送批量翻译流式请求"""
+        import server.main
+        headers = {'X-Nonce': server.main.nonce} if server.main.nonce else {}
         await fetch_data_stream("http://"+self.ip+":"+str(self.port)+"/execute/translate_batch",
-                               {"images": images, "config": config, "batch_size": batch_size}, config, sender)
+                               {"images": images, "config": config, "batch_size": batch_size}, config, sender, headers=headers)
 
 class Executors:
     def __init__(self):

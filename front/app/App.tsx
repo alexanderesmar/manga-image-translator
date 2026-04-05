@@ -236,7 +236,8 @@ export const App: React.FC = () => {
     formData.append("image", file);
     formData.append("config", config);
 
-    const response = await fetch(`/api/translate/with-form/image/stream`, {
+    const apiBaseUrl = import.meta.env.DEV ? "/api" : `http://${window.location.hostname}:8000`;
+    const response = await fetch(`${apiBaseUrl}/translate/with-form/image/stream`, {
       method: "POST",
       body: formData,
     });

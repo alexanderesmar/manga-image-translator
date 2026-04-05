@@ -388,7 +388,7 @@ async def delete_result(folder_name: str):
 
 if __name__ == '__main__':
     import uvicorn
-    from args import parse_arguments
+    from server.args import parse_arguments
 
     args = parse_arguments()
     args.start_instance = True

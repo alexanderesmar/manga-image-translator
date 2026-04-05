@@ -1,11 +1,39 @@
-
 services:
-  front:
-    image: front
+  translator:
     build:
-      context: front
-      dockerfile: ./Dockerfile
+      context: .
+      dockerfile: Dockerfile
+    container_name: manga-translator-backend
+    image: manga-translator-backend:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     environment:
-      NODE_ENV: production
+      - PYTHONPATH=/app
+      - MT_WEB_NONCE=None
+    volumes:
+      - ./models:/app/models
+      - ./result:/app/result
     ports:
-      - 3000:3000
+      - "8000:8000"
+      - "8001:8001"
+    ipc: host
+    entrypoint: python
+    command: -m server.main --host 0.0.0.0 --port 8000 --nonce None --use-gpu --start-instance
+
+  front:
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+    container_name: manga-translator-frontend
+    image: manga-translator-frontend:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - translator
