@@ -14,6 +14,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from fastapi import FastAPI, Request, HTTPException, Header, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
+from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
@@ -381,6 +382,149 @@ async def delete_result(folder_name: str):
         return {"message": f"Deleted result directory: {folder_name}"}
     except Exception as e:
         raise HTTPException(500, detail=f"Error deleting result: {str(e)}")
+
+class ScrapeRequest(BaseModel):
+    url: str
+    min_width: int = 400
+
+@app.post("/scrape-url", tags=["api"])
+async def scrape_url(request: ScrapeRequest):
+    from bs4 import BeautifulSoup
+    import httpx
+    import io
+    from urllib.parse import urljoin, urlparse
+    from PIL import Image as PILImage
+    
+    # Validate URL
+    parsed = urlparse(str(request.url))
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, detail="Only http/https URLs are supported")
+    
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; manga-translator/1.0)"}
+    
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        try:
+            # Fetch the page
+            resp = await client.get(str(request.url), headers=headers)
+            if resp.status_code != 200:
+                raise HTTPException(422, detail=f"Page returned {resp.status_code}")
+        except Exception as e:
+            raise HTTPException(422, detail=f"Failed to fetch page: {str(e)}")
+        
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        # Collect candidate image URLs in document order
+        candidates = []
+        seen = set()
+        
+        # Find all images and potential sources
+        for tag in soup.find_all(["img", "source", "meta"]):
+            urls_to_check = []
+            
+            if tag.name == "img":
+                for attr in ["src", "data-src", "data-lazy-src", "data-original", "srcset"]:
+                    val = tag.get(attr)
+                    if val:
+                        urls_to_check.append(val)
+            elif tag.name == "source":
+                val = tag.get("srcset")
+                if val:
+                    urls_to_check.append(val)
+            elif tag.name == "meta" and tag.get("property") == "og:image":
+                val = tag.get("content")
+                if val:
+                    urls_to_check.append(val)
+
+            for raw in urls_to_check:
+                # Handle srcset (take largest/last)
+                if "," in raw:
+                    raw = raw.split(",")[-1].strip().split(" ")[0]
+                
+                if raw and not raw.startswith("data:"):
+                    abs_url = urljoin(str(request.url), raw)
+                    if abs_url not in seen:
+                        seen.add(abs_url)
+                        candidates.append(abs_url)
+        
+        # Check dimensions for each candidate
+        results = []
+        
+        async def check_image(img_url):
+            try:
+                # Use a small limit for head/partial get if possible, but simplest is full fetch for now
+                # as some servers won't provide dimensions without full download
+                img_resp = await client.get(img_url, headers=headers)
+                if img_resp.status_code != 200:
+                    return None
+                
+                img = PILImage.open(io.BytesIO(img_resp.content))
+                w, h = img.size
+                if w >= request.min_width:
+                    return {"url": img_url, "width": w, "height": h}
+            except Exception:
+                return None
+
+        # Limit concurrency to be polite
+        semaphore = asyncio.Semaphore(5)
+        async def sem_check(url):
+            async with semaphore:
+                return await check_image(url)
+
+        check_tasks = [sem_check(url) for url in candidates]
+        checked_results = await asyncio.gather(*check_tasks)
+        
+        # Filter and index
+        for res in checked_results:
+            if res:
+                res["index"] = len(results)
+                results.append(res)
+        
+        return {"images": results, "total": len(results), "source_url": str(request.url)}
+
+@app.get("/proxy-image", tags=["api"])
+async def proxy_image(url: str, referer: str = ""):
+    """Proxy an external image through the backend to bypass browser CORS restrictions."""
+    import httpx
+    from urllib.parse import urlparse
+    from fastapi.responses import StreamingResponse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, detail="Only http/https URLs are supported")
+
+    req_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+    if referer:
+        req_headers["Referer"] = referer
+    else:
+        # Use the image's own origin as referer (helps bypass hotlink protection)
+        req_headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(url, headers=req_headers)
+            if resp.status_code != 200:
+                raise HTTPException(resp.status_code, detail=f"Remote server returned {resp.status_code}")
+
+            content_type = resp.headers.get("content-type", "image/jpeg")
+            # Ensure it's an image
+            if not content_type.startswith("image/"):
+                content_type = "image/jpeg"
+
+            return StreamingResponse(
+                iter([resp.content]),
+                media_type=content_type,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Cache-Control": "public, max-age=3600",
+                    "Content-Length": str(len(resp.content)),
+                },
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(504, detail="Request to remote server timed out")
+    except Exception as e:
+        raise HTTPException(502, detail=f"Failed to proxy image: {str(e)}")
 
 #todo: restart if crash
 #todo: cache results

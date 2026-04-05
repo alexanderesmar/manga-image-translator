@@ -16,6 +16,7 @@ import { ImageQueue } from "@/components/ImageQueue";
 import { ResultGallery } from "@/components/ResultGallery";
 import { Header } from "@/components/Header";
 import { loadSettings, saveSettings, loadFinishedImages, addFinishedImage } from "@/utils/localStorage";
+import { UrlScraper } from "./components/UrlScraper";
 
 export const App: React.FC = () => {
   // State Hooks
@@ -236,7 +237,9 @@ export const App: React.FC = () => {
     formData.append("image", file);
     formData.append("config", config);
 
-    const apiBaseUrl = import.meta.env.DEV ? "/api" : `http://${window.location.hostname}:8000`;
+    const apiBaseUrl = typeof window !== "undefined" 
+      ? (import.meta.env.DEV ? "/api" : `http://${window.location.hostname}:8000`)
+      : "";
     const response = await fetch(`${apiBaseUrl}/translate/with-form/image/stream`, {
       method: "POST",
       body: formData,
@@ -332,6 +335,40 @@ export const App: React.FC = () => {
       );
     } catch (err) {
       console.error("Translation process failed:", err);
+    }
+  };
+
+  /**
+   * Translates a set of images sequentially (e.g. from a URL scraper)
+   */
+  const handleTranslateImages = async (newFiles: File[]) => {
+    // 1. Add to files list
+    setFiles((prev) => [...prev, ...newFiles]);
+    
+    // 2. Initialize status
+    setFileStatuses((prev: Map<string, FileStatus>) => {
+      const nextStatuses = new Map(prev);
+      newFiles.forEach(file => {
+        nextStatuses.set(file.name, {
+          status: null,
+          progress: null,
+          queuePos: null,
+          result: null,
+          error: null,
+        });
+      });
+      return nextStatuses;
+    });
+
+    const config = buildTranslationConfig();
+    
+    // 3. Process sequentially
+    for (const file of newFiles) {
+      try {
+        await processSingleFileStream(file, config);
+      } catch (err) {
+        console.error(`Failed to process ${file.name} in sequential run:`, err);
+      }
     }
   };
 
@@ -464,6 +501,15 @@ export const App: React.FC = () => {
             setInpainter={setInpainter}
           />
           
+          <div className="relative border-t pt-6">
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white px-4 text-xs font-medium text-gray-400 uppercase tracking-wider">
+              or translate from URL
+            </div>
+            <UrlScraper 
+              onTranslateImages={handleTranslateImages} 
+              isProcessing={isProcessing} 
+            />
+          </div>
           {/* Image Queue Section */}
           <div className="border-t pt-6">
             <ImageQueue
